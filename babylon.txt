@@ -1,0 +1,325 @@
+class Enemy {
+    mesh;
+    direction = 0;
+    angle = 0;
+    constructor(mesh) {
+        this.mesh = mesh;
+    }
+}
+
+var createScene = function () {
+    // This creates a basic Babylon Scene object (non-mesh)
+    var scene = new BABYLON.Scene(engine);
+    scene.clearColor = new BABYLON.Color3(0.2, 0.2, 0.2);
+
+    // This creates and positions a free camera (non-mesh)
+    var camera = new BABYLON.FreeCamera("camera1", new BABYLON.Vector3(0, 0.5, 0), scene);
+    camera.minZ = 0.001;
+    camera.maxZ = 1000.0;
+    var light = new BABYLON.PointLight("light", new BABYLON.Vector3(0, 0, 0), scene);
+    light.range = 5;
+    light.intensity = 0.3;
+    light.parent = camera;
+
+    // This targets the camera to scene origin
+    camera.setTarget(new BABYLON.Vector3(0, 0.5, 1));
+
+    // This creates a light, aiming 0,1,0 - to the sky (non-mesh)
+    var light1 = new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0, 1, 0), scene);
+    light1.intensity = 0.1;
+    var light2 = new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0, -1, 0), scene);
+    light2.intensity = 0.1;
+
+    // GUI
+    var advancedTexture = BABYLON.GUI.AdvancedDynamicTexture.CreateFullscreenUI("UI");
+    var target = new BABYLON.GUI.Image("target", "https://litdev.uk/game_images/uploads/sights.png");
+    var info = new BABYLON.GUI.TextBlock();
+    createGUI();
+
+    // Maze topology
+    var maze = [];
+    maze[2] = "SXXSXXXXXLX";
+    maze[1] = "X X       X";
+    maze[0] = "XXXXXXXXXXX";
+
+    // Create maze
+    var walls = [];
+    var enemies = [];
+    createMaze();
+
+    // Key controls
+    var pressedKeys = {};
+    keyEvents();
+
+    // Dynamic update ~60fps
+    var speed = 1;
+    var step = 0;
+    var lastTime = performance.now();
+    var numAnimate = 0;
+
+    //Game loop
+    scene.onBeforeRenderObservable.add(() => {
+        step++;
+        var dt = (performance.now() - lastTime) / 1000; //seconds
+        lastTime = performance.now();
+        info.text = "";
+
+        updateSprites();
+        var dist = updateCollisions(dt);
+        updateCamera(dt, dist);
+    });
+
+    function createGUI() {
+        target.textHorizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_CENTER;
+        target.textVerticalAlignment = BABYLON.GUI.Control.VERTICAL_ALIGNMENT_CENTER;
+        target.width = "50px";
+        target.height = "50px";
+        target.alpha = 0.5;
+        advancedTexture.addControl(target);
+
+        var info = new BABYLON.GUI.TextBlock();
+        info.textHorizontalAlignment = BABYLON.GUI.Control.HORIZONTAL_ALIGNMENT_LEFT;
+        info.textVerticalAlignment = BABYLON.GUI.Control.VERTICAL_ALIGNMENT_TOP;
+        info.color = "red";
+        info.fontSize = 12;
+        advancedTexture.addControl(info);
+    }
+
+    function updateSprites() {
+        if (numAnimate == 0) {
+            for (let i = 0; i < enemies.length; i++) {
+                var enemy = enemies[i];
+                enemy.mesh.animations = [];
+
+                var x = Math.floor(enemy.mesh.position.x);
+                var y = Math.floor(enemy.mesh.position.y);
+                var z = Math.floor(enemy.mesh.position.z);
+
+                var dirs = [];
+                if (x > 0 && maze[z].charAt(x - 1) != ' ') dirs.push(0);
+                if (x < maze[z].length - 1 && maze[z].charAt(x + 1) != ' ') dirs.push(1);
+                if (z > 0 && x < maze[z - 1].length && maze[z - 1].charAt(x) != ' ') dirs.push(2);
+                if (z < maze.length - 1 && x < maze[z + 1].length && maze[z + 1].charAt(x) != ' ') dirs.push(3);
+
+                if (dirs.indexOf(enemy.direction) !== -1 && Math.random() > 0.2) {
+                    //Moving forward is an option
+                }
+                else if (dirs.length > 0) //Pick one
+                {
+                    var dir = Math.floor(Math.random() * dirs.length);
+                    enemy.direction = dirs[dir];
+
+                    var angle = 0;
+                    if (enemy.direction == 0) angle = -Math.PI / 2;
+                    else if (enemy.direction == 1) angle = Math.PI / 2;
+                    else if (enemy.direction == 2) angle = Math.PI;
+                    else if (enemy.direction == 3) angle = 0;
+
+                    var animRotate = new BABYLON.Animation("rotation", "rotation.y", 60, BABYLON.Animation.ANIMATIONTYPE_FLOAT, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+                    animRotate.setKeys([
+                        { frame: 0, value: enemy.angle },
+                        { frame: 30, value: angle }
+                    ]);
+                    enemy.angle = angle;
+                    enemy.mesh.animations.push(animRotate);
+                }
+                var animPosition = new BABYLON.Animation("position", "position", 60, BABYLON.Animation.ANIMATIONTYPE_VECTOR3, BABYLON.Animation.ANIMATIONLOOPMODE_CONSTANT);
+                var position = new BABYLON.Vector3(enemy.mesh.position.x, enemy.mesh.position.y, enemy.mesh.position.z);
+                if (enemy.direction == 0) position.x -= 1;
+                else if (enemy.direction == 1) position.x += 1;
+                else if (enemy.direction == 2) position.z -= 1;
+                else if (enemy.direction == 3) position.z += 1;
+                animPosition.setKeys([
+                    { frame: 0, value: enemy.mesh.position },
+                    { frame: 60, value: position }
+                ]);
+                var animEvent = new BABYLON.AnimationEvent(60,
+                    function () {
+                        numAnimate--;
+                    },
+                    true
+                );
+                animPosition.addEvent(animEvent);
+                enemy.mesh.animations.push(animPosition);
+
+                scene.beginAnimation(enemy.mesh, 0, 60, false);
+                numAnimate++;
+            }
+        }
+    }
+
+    function updateCollisions(dt) {
+        var pickResult = scene.pick(canvas.width / 2, canvas.height / 2); //Canvas center maybe not a good choice for proximity
+        var dist = 1000;
+        var infoDist = "";
+        if (pickResult.hit) {
+            if (pickResult.pickedMesh.name.startsWith("wall")) {
+                dist = pickResult.distance;
+            }
+            infoDist = pickResult.distance.toFixed(2) + " m (" + pickResult.pickedMesh.name + ")";
+            //var lookDirection = pickResult.pickedPoint.subtract(camera.position);
+            //var wallDirection = pickResult.pickedMesh.getFacetNormal(0);
+            //dist = Math.abs(wallDirection.dot(lookDirection));
+            //dist = lookDirection.length();
+        }
+        info.text += (1 / dt).toFixed(0) + " fps\nDistance " + infoDist;
+        return dist;
+    }
+
+    function updateCamera(dt, dist) {
+        var yaw = 0;
+        var pitch = 0;
+        var roll = 0;
+        var move = 0;
+        //Time keys down for smoother movement
+        if (pressedKeys["ArrowUp"] && dist > 0.1) pressedKeys["Up"] += dt;
+        else pressedKeys["Up"] = 0;
+        if (pressedKeys["ArrowDown"] && dist > 0.1) pressedKeys["Down"] += dt;
+        else pressedKeys["Down"] = 0;
+        if (pressedKeys["ArrowLeft"]) pressedKeys["Left"] += dt;
+        else pressedKeys["Left"] = 0;
+        if (pressedKeys["ArrowRight"]) pressedKeys["Right"] += dt;
+        else pressedKeys["Right"] = 0;
+        //Accelerate more if space down
+        var acc = pressedKeys["Space"] ? 2 : 1;
+        //Accelerate movement for first period of key down
+        var accTime = 0.5;
+        move += 1.5 * speed * Math.pow(Math.min(pressedKeys["Up"], accTime) / accTime, 2) * acc * dt;
+        yaw -= 1.5 * speed * Math.pow(Math.min(pressedKeys["Left"], accTime) / accTime, 2) * acc * dt;
+        yaw += 1.5 * speed * Math.pow(Math.min(pressedKeys["Right"], accTime) / accTime, 2) * acc * dt;
+        //info.text += "\n\n" + pitch + " : " + yaw + " : " + roll + " : " + move + " : " + dist;
+
+        var position = camera.position;
+        var lookDirection = camera.getTarget().subtract(position).normalize();
+        var quaterion = new BABYLON.Quaternion.FromEulerAngles(pitch, yaw, roll);
+        lookDirection = lookDirection.applyRotationQuaternion(quaterion);
+        position = position.add(lookDirection.scale(move));
+        camera.setTarget(position.add(lookDirection));
+        camera.position = position;
+    }
+
+    function keyEvents() {
+        canvas.addEventListener("keydown", e => {
+            pressedKeys[e.code] = true;
+            //info.text = e.code;
+        });
+        canvas.addEventListener("keyup", e => {
+            pressedKeys[e.code] = false;
+        });
+    }
+
+    function createMaze() {
+        // Surface materials
+        var materials = [];
+        loadMaterials(materials);
+
+        for (let z = 0; z < maze.length; z++) {
+            for (let x = 0; x < maze[z].length; x++) {
+                //Floor-ceiling
+                createWall(x, z, "Y-", materials);
+                createWall(x, z, "Y+", materials);
+
+                //XNEG
+                if (x == 0 || maze[z].charAt(x) == ' ') {
+                    createWall(x, z, "X-", materials);
+                }
+                //XPOS
+                if (x == maze[z].length - 1 || maze[z].charAt(x) == ' ') {
+                    createWall(x, z, "X+", materials);
+                }
+                //ZNEG
+                if (z == 0 || x >= maze[z - 1].length || maze[z].charAt(x) == ' ') {
+                    createWall(x, z, "Z-", materials);
+                }
+                //ZPOS
+                if (z == maze.length - 1 || x >= maze[z + 1].length || maze[z].charAt(x) == ' ') {
+                    createWall(x, z, "Z+", materials);
+                }
+
+                if (maze[z].charAt(x) == 'S') {
+                    createEnemy(x, z, materials[2]);
+                }
+                else if (maze[z].charAt(x) == 'L') {
+                    var light = new BABYLON.PointLight("light", new BABYLON.Vector3(x, 1, z), scene);
+                    light.range = 2;
+                    light.diffuse = new BABYLON.Color3(1, 0.8, 0.8);
+                    light.intensity = 0.5;
+                }
+            }
+        }
+    }
+
+    function createWall(x, z, side, materials) {
+        var wall = new BABYLON.MeshBuilder.CreatePlane("wall" + walls.length.toString(), { sideOrientation: BABYLON.Mesh.DOUBLESIDE }, scene);
+        wall.checkCollisions = true;
+
+        switch (side) {
+            case "X-":
+                wall.position.x = x - 0.5;
+                wall.position.y = 0.5;
+                wall.position.z = z;
+                wall.material = materials[0];
+                wall.rotateAround(wall.position, new BABYLON.Vector3(0, 1, 0), Math.PI / 2);
+                break;
+            case "X+":
+                wall.position.x = x + 0.5;
+                wall.position.y = 0.5;
+                wall.position.z = z;
+                wall.material = materials[0];
+                wall.rotateAround(wall.position, new BABYLON.Vector3(0, 1, 0), Math.PI / 2);
+                break;
+            case "Y-":
+                wall.position.x = x;
+                wall.position.y = 0;
+                wall.position.z = z;
+                wall.material = materials[1];
+                wall.rotateAround(wall.position, new BABYLON.Vector3(1, 0, 0), Math.PI / 2);
+                break;
+            case "Y+":
+                wall.position.x = x;
+                wall.position.y = 1;
+                wall.position.z = z;
+                wall.material = materials[2];
+                wall.rotateAround(wall.position, new BABYLON.Vector3(1, 0, 0), Math.PI / 2);
+                break;
+            case "Z-":
+                wall.position.x = x;
+                wall.position.y = 0.5;
+                wall.position.z = z - 0.5;
+                wall.material = materials[0];
+                break;
+            case "Z+":
+                wall.position.x = x;
+                wall.position.y = 0.5;
+                wall.position.z = z + 0.5;
+                wall.material = materials[0];
+                break;
+        }
+
+        walls.push(wall);
+    };
+
+    function loadMaterials(materials) {
+        materials[0] = new BABYLON.StandardMaterial("wall", scene);
+        materials[0].diffuseTexture = new BABYLON.Texture("https://litdev.uk/game_images/uploads/wall.jpg", scene);
+        materials[1] = new BABYLON.StandardMaterial("stones", scene);
+        materials[1].diffuseTexture = new BABYLON.Texture("https://litdev.uk/game_images/uploads/stones.jpg", scene);
+        materials[2] = new BABYLON.StandardMaterial("water", scene);
+        materials[2].diffuseTexture = new BABYLON.Texture("https://litdev.uk/game_images/uploads/water.jpg", scene);
+    }
+
+    function createEnemy(x, z, material) {
+        BABYLON.SceneLoader.ImportMeshAsync("", Assets.meshes.Yeti.rootUrl, Assets.meshes.Yeti.filename, scene).then((result) => {
+            var enemy = result.meshes[0];
+            enemy.name = "enemy" + enemies.length.toString();
+            enemy.rotationQuaternion = null;
+            enemy.scaling = new BABYLON.Vector3(0.02, 0.02, 0.02);
+            enemy.position.x = x;
+            enemy.position.y = 0;
+            enemy.position.z = z;
+            enemies.push(new Enemy(enemy));
+        });
+    }
+
+    return scene;
+};

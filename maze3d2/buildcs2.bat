@@ -1,0 +1,1 @@
+C:\Windows\Microsoft.NET\Framework\v4.0.30319\csc.exe /r:SmallBasicLibrary.dll /r:LitDev.dll %1 %2
